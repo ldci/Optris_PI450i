@@ -17,7 +17,7 @@ Install [Python 3] (https://www.python.org/downloads/ › download). Then with p
 Finally install [dLibC++](http://dlib.net) dLib C++ with pip (pip install lib).
 Once all that stuff installed, adapt path access to your compiuter and compile the source bbCry44.red with Red Tool Chain.
 
-###Runnning the code
+### Runnning the code
 
 Code must be used in terminal mode. So, change dir to the code directory and execute ./bbCry44.
 
