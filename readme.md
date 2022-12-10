@@ -1,7 +1,7 @@
 # OPTRIS PI 450i
 
 
-This code allows to easily access ravi files produced by Optris PI45Oi thermal imager. This code use dLib C++ neural network to identify face landmarks in the images. Red language libraries for image processing are included. 
+This code allows to easily access ravi files produced by Optris PI45Oi thermal imager. This code uses dLib C++ neural network to identify face landmarks in the images. Red language libraries for image processing are included. 
 
 
 ### Required 
