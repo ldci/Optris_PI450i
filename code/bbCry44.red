@@ -6,7 +6,7 @@ Red [
 	Needs:	 View
 ]
 
-;--Ffmpeg is  required  for large files
+;--Ffmpeg is  required  for splitting ravi files
 ;--this version is for 16-bit unsigned integer (0..65535); only for new optris files 
 ;--this version is adaptated to long movies
 
@@ -106,19 +106,18 @@ optrisFile: none						;--optris ravi file
 mapFile: "lib/maps/Iron.png"			;--default palette						
 imgMap: load to-file mapFile			;--load default palette
 colMap: []								;--color mapping block
-matV: make vector!  [integer! 32 0]		;--for int16 matrix
-matGS: make vector! [integer! 32 0]		;--low grayscale matrix
+matV:   make vector! [integer! 32 0]	;--for int16 matrix
+matGS:  make vector! [integer! 32 0]	;--low grayscale matrix
 matRGB: make vector! [integer! 32 0]	;--colorimage matrix
 minRange: -20							;--minimal optris range 
 maxRange: 100							;--maximal optris range
 minTemp: maxTemp: 0.0					;--minimal and maximal temperatures initialization
-local: copy []							;--minimal and maximal values in raw data
 fps: 1									;--frame by second
 frate: to-time 1 / fps					;--frame rate	
 currentImage: 1							;--first frame
 isFile: false							;--binary file not yet loaded 
+img0: make image! imageSize				;--we test a colored image
 img1: make image! imageSize				;--we need a grayscale image
-img0: make image! imageSize				;--we need a colored image
 img2: make image! imageSize				;--we need a heat map image 
 img3: make image! imageSize				;--for filters 
 img4: make image! imageSize				;--for filters
@@ -154,6 +153,7 @@ coordinates: []							;--landmarks coordinates
 tmpCoords: []							;--internal
 ref: 0									;--temperature reference
 clipSize: 30x30
+neighbors: 4							;--0, 4 or 8 neighbors
 
 
 ; for Unicode string with images
@@ -268,7 +268,7 @@ updateFaceRect: does [
 ;--but images are in binary format
 splitRavi: does [
 print "Splitting ravi File"
-	_dataDir: to-local-file dataDir ;--a string
+	_dataDir: to-local-file dataDir ;--a string for ffmpeg
 	;--original macOS version
 	str: copy rejoin [
 		"ffmpeg -y -i '"  fileName "'"
@@ -309,10 +309,10 @@ readImage: func [idx [integer!]] [
 	if isFile [
 		bin: read/binary to-file rejoin [form dataDir fileList/(idx)]
 		;--get synchro
-		header: copy/part bin 126 ;--after values are 0
-		lo: header/125
-		hi: header/126
-		synchro: 256 * hi + lo ;--16-bit
+		header: copy/part bin 126 							;--after values are 0
+		lo: header/125										;--low byte
+		hi: header/126										;--high byte
+		synchro: 256 * hi + lo ;--16-bit					;--get synchro value as 16-bit value
 		bin: skip bin imgSize/x * 2							;--now skip first row
 		minVi: 0 maxVi: 0								    ;--min max	
 		getMinMax bin tblk: [minVi maxVi]					;--find min max values in image
@@ -321,9 +321,9 @@ readImage: func [idx [integer!]] [
 		tmpIntMin/text: form minVi							;--update face
 		tmpIntMax/text: form maxVi							;--update face
 		getTempInt16Values bin matV	 						;--store 16-bit values in matrix
-		getGrayScale bin matGS tblk/1 tblk/2;minVi maxVi 	;--store low byte values in normalized matrix
-		minTemp: to float! minVi
-		maxTemp: to float! maxVi
+		getGrayScale bin matGS minVi maxVi				 	;--store low byte values in normalized matrix
+		minTemp: to float! minVi							;--as float
+		maxTemp: to float! maxVi							;--as float
 		getHeatMap matV colMap img2 minTemp maxTemp			;--make heat map image
 		img1/rgb: to-binary to-block matGS					;--make grayscale image
     	;rcvIR2RGB img2 img0 knl 1							;--test
@@ -331,7 +331,7 @@ readImage: func [idx [integer!]] [
 		canvas1/image: img1									;--show GS image
 		canvas2/image: img2									;--show heat map
 		f2/text: form currentImage: idx						;--current image
-		tmpCoords: []
+		tmpCoords: []										;--for temperatures
 	]
 ]
 ;--to show grayscale image
@@ -436,7 +436,7 @@ processImage: does [
 		if record? [
 			str: rejoin [form currentImage " "  form synchro " " ref " "]
 			foreach point coordinates [
-				append append str form getPointTemp point " "
+				append append str form getPointTemp point neighbors " "
 			]
 			append tempData str
 		]
@@ -453,7 +453,7 @@ filterImage: does [
 		simg: img1 ;canvas1/image ;
 		rcvRChannel simg dimg 4					 ;--keep red channel
 		rcvThreshold/binary dimg mimg thresh 255 ;--mask 0 or 255 according to thresh value
-		rcvAnd simg mimg rimg					 ;--And source  and mask 
+		rcvAnd simg mimg rimg					 ;--And source and mask 
 		canvas1/image: rimg						 ;--result
 	]
 ]
@@ -483,7 +483,7 @@ makeColorMap: does [
 
 ;--Manual Pixel temperature reader for frontal zones
 getPixelTemp: does [
-	posct: p2/offset - canvas2/offset + 11
+	posct: tReader/offset - canvas2/offset + 11
 	if all [posct/x >= 0 posct/y >= 0 posct/x <= imageSize/x posct/y <= imageSize/y][
 		idx: posct/y * imageSize/x + posct/x
 		ref: form matV/:idx
@@ -492,11 +492,30 @@ getPixelTemp: does [
 ]
 
 ;landmarks temperature reader: returns raw value associated to the coordinate
+;--added 0, 4 or 8 connexity
+
 getPointTemp: func [
-	coord	[pair!]
+	coord		[pair!]
+	connexity	[integer!] ;--0 4 8 neighbors
 ][
-	idx: coord/y * imageSize/x + coord/x
-	matV/:idx	
+	;idx: coord/y * imageSize/x + coord/x
+	;matV/:idx
+	p5: matV/(coord/y * imageSize/x + coord/x)
+	p4: matV/(coord/y * imageSize/x + coord/x - 1)
+	p6: matV/(coord/y * imageSize/x + coord/x + 1)
+	p1: matV/(coord/y - 1 * imageSize/x + coord/x - 1)
+	p2: matV/(coord/y - 1 * imageSize/x + coord/x)
+	p3: matV/(coord/y - 1 * imageSize/x + coord/x + 1)
+	p7: matV/(coord/y + 1 * imageSize/x + coord/x - 1)
+	p8: matV/(coord/y + 1 * imageSize/x + coord/x)
+	p9: matV/(coord/y + 1 * imageSize/x + coord/x + 1)
+	switch connexity [
+		0 [sigma: p5]
+		4 [sigma: (p5 + p2 + p8 + p4 + p6)]
+		8 [sigma: (p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9)]		
+	]
+	to integer! sigma / (connexity + 1)
+	
 ]
 
 
@@ -561,9 +580,9 @@ mainwin: layout [
 	]
 	button "Clear" [clear coordinates clear tmpCoords] 
 	return
-	text 60 "Signal" bold 
+	text 60 "Signal"  
 	meanStim: field 80
-	check "Call dLib library" 130 bold false [dLib?: face/data]
+	check "Call dLib library" 130 false [dLib?: face/data]
 	check "Landmarks" false [
 		landmarks?: face/data 
 		unless landmarks? [clear info/text clear pointsList/data]
@@ -571,7 +590,15 @@ mainwin: layout [
 	check "Box" 60 false [box?: face/data]
 	pad 5x0
 	
-	check "Record Data" bold false [record?: face/data]
+	check "Record Data" false [record?: face/data]
+	text 60 "neighbors"
+	dp2: drop-down 40 data ["0" "4" "8"]
+	select 2
+	on-change [
+		neighbors: to-integer pick face/data face/selected
+	]
+	
+	
 	button 65 "Clear" [clearData]
 	button 65  "Save" [write/lines resultDataFile tempData info/text: "Data Saved"]
 	return
@@ -618,7 +645,7 @@ mainwin: layout [
 	at as-pair canvas2/offset/x + 152  canvas2/offset/y  tmpPix: h4 black "_._" center font-color acolor
 	
 	;--Temperature  reader
-	at canvas2/offset + 10x30 p2: base 0.0.0.254 22x22 loose draw drawCross
+	at canvas2/offset + 10x30 tReader: base 0.0.0.254 22x22 loose draw drawCross
 	on-drag [getPixelTemp]
 	
 	;--Face box
